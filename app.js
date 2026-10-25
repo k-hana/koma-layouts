@@ -136,29 +136,60 @@ function select(layout) {
 
 const imgKey = (i) => `${state.current.id}:${i}`;
 
-/** 置いた絵。px・py は位置（Studio の background-position の %・50 が中央）、zoom は拡大（1 がコマいっぱい）。 */
+/**
+ * 置いた絵。Studio と同じ値を持つ（同じ値を Studio のページ編集に入れれば同じに見える）:
+ * zoom＝拡大（1 がコマいっぱい・それ以外は 絵の幅＝コマの幅×拡大）・ox / oy＝ずらし（コマの幅・高さに対する %）・rot＝回転（度）。
+ * 位置（background-position）は中央のまま。
+ */
 function setImage(i, file) {
   if (!file || !file.type.startsWith("image/")) return;
   const old = state.images.get(imgKey(i));
   if (old) URL.revokeObjectURL(old.url);
-  const im = { url: URL.createObjectURL(file), name: file.name, iw: 0, ih: 0, px: 50, py: 50, zoom: 1 };
+  const im = { url: URL.createObjectURL(file), name: file.name, iw: 0, ih: 0, zoom: 1, ox: 0, oy: 0, rot: 0 };
   state.images.set(imgKey(i), im);
+  const panel = state.current.panels[i];
   const probe = new Image();
-  probe.onload = () => { im.iw = probe.naturalWidth; im.ih = probe.naturalHeight; renderDetail(); };
+  probe.onload = () => {
+    im.iw = probe.naturalWidth; im.ih = probe.naturalHeight;
+    // 下絵どおりの大きさなら、余白がちょうどコマの外に出るように置く（Studio の fitKomaImage と同じ）
+    const fit = fitKomaImage(panel, im.iw, im.ih);
+    if (fit) Object.assign(im, fit);
+    renderDetail();
+  };
   probe.src = im.url;
 }
 
-/** Studio と同じ置き方: zoom が 1 ならコマの箱いっぱい（cover）、それ以外は箱の幅 × zoom。位置は background-position の %。 */
+/** packages/comic-engine/src/layout/komaFit.ts の写し。下絵（外接矩形＋余白）と縦横比が合う絵なら拡大とずらしを返す。 */
+function fitKomaImage(panel, iw, ih) {
+  if (panel.rotation || iw <= 0 || ih <= 0) return null;
+  const { W, H } = pageSize();
+  const m = Math.max(0, Math.round(state.margin));
+  const verts = panelVerts(panel, W, H);
+  const xs = verts.map((v) => v[0]), ys = verts.map((v) => v[1]);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  const rw = Math.round(Math.max(...xs) - minX + 2 * m), rh = Math.round(Math.max(...ys) - minY + 2 * m);
+  if (Math.abs(iw / ih - rw / rh) / (rw / rh) > 0.01) return null;
+  const b = panelBox(panel, W, H);
+  if (b.w <= 0 || b.h <= 0) return null;
+  let zoom = rw / b.w;
+  if (Math.abs(zoom - 1) < 1e-4) zoom = 1.0001;
+  const dw = b.w * zoom, dh = (dw * ih) / iw;
+  const ox = ((minX - m - (b.x + (b.w - dw) / 2)) / b.w) * 100, oy = ((minY - m - (b.y + (b.h - dh) / 2)) / b.h) * 100;
+  return { zoom: Math.round(zoom * 10000) / 10000, ox: Math.round(ox * 100) / 100, oy: Math.round(oy * 100) / 100 };
+}
+
+/** Studio と同じ置き方（packages/comic-engine/src/render/panelImage.ts の写し・位置は中央）。 */
 function imagePlacement(box, im) {
   if (!im.iw || !im.ih) return { x: box.x, y: box.y, w: box.w, h: box.h };
   let w, h;
   if (im.zoom === 1) { const k = Math.max(box.w / im.iw, box.h / im.ih); w = im.iw * k; h = im.ih * k; }
   else { w = box.w * im.zoom; h = (w * im.ih) / im.iw; }
-  return { x: box.x + ((box.w - w) * im.px) / 100, y: box.y + ((box.h - h) * im.py) / 100, w, h };
+  return { x: box.x + (box.w - w) / 2 + (im.ox / 100) * box.w, y: box.y + (box.h - h) / 2 + (im.oy / 100) * box.h, w, h };
 }
 const ZOOM_MIN = 0.3, ZOOM_MAX = 5;      // Studio の拡大の入力欄と同じ
-const POS_MIN = -120, POS_MAX = 220;     // Studio のドラッグの位置の範囲と同じ
+const OFFSET_LIMIT = 150;                // Studio のずらしの範囲と同じ（コマに対する ±150%）
 const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const fmt1 = (v) => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1); // -0.0 と出さない
 
 /** 何枚か一度に落としたとき: ファイル名の koma-{番号} でコマを決め、無ければ空いたコマに順に置く。 */
 function placeFiles(files, startAt = 0) {
@@ -205,7 +236,11 @@ function preview(layout, rects) {
       image = svg("image", { preserveAspectRatio: "none" });
       image.setAttributeNS("http://www.w3.org/1999/xlink", "href", im.url);
       image.setAttribute("href", im.url);
-      const place = () => { const q = imagePlacement(b, im); image.setAttribute("x", q.x); image.setAttribute("y", q.y); image.setAttribute("width", q.w); image.setAttribute("height", q.h); };
+      const place = () => {
+        const q = imagePlacement(b, im);
+        image.setAttribute("x", q.x); image.setAttribute("y", q.y); image.setAttribute("width", q.w); image.setAttribute("height", q.h);
+        image.setAttribute("transform", im.rot ? `rotate(${im.rot} ${q.x + q.w / 2} ${q.y + q.h / 2})` : ""); // 絵の中心で回す
+      };
       place();
       image.place = place;
       inner.append(image);
@@ -223,7 +258,7 @@ function preview(layout, rects) {
       e.preventDefault();
       g.setPointerCapture(e.pointerId);
       const unit = s.getBoundingClientRect().width / W; // 画面の 1px あたりのページ px
-      const sx = e.clientX, sy = e.clientY, px0 = im.px, py0 = im.py;
+      const sx = e.clientX, sy = e.clientY, ox0 = im.ox, oy0 = im.oy;
       const rad = (-b.rot * Math.PI) / 180;
       let moved = false;
       const move = (ev) => {
@@ -231,8 +266,9 @@ function preview(layout, rects) {
         if (!moved && Math.hypot(dxs, dys) < 4) return;
         moved = true;
         const dx = dxs * Math.cos(rad) - dys * Math.sin(rad), dy = dxs * Math.sin(rad) + dys * Math.cos(rad); // 箱の向きに直す
-        im.px = clampNum(px0 - (dx / (b.w * unit)) * 100, POS_MIN, POS_MAX);
-        im.py = clampNum(py0 - (dy / (b.h * unit)) * 100, POS_MIN, POS_MAX);
+        // 絵ごとずらす（拡大していなくても、どの向きにも動く）
+        im.ox = Math.round(clampNum(ox0 + (dx / (b.w * unit)) * 100, -OFFSET_LIMIT, OFFSET_LIMIT) * 100) / 100;
+        im.oy = Math.round(clampNum(oy0 + (dy / (b.h * unit)) * 100, -OFFSET_LIMIT, OFFSET_LIMIT) * 100) / 100;
         image.place();
       };
       const up = () => {
@@ -266,7 +302,7 @@ function preview(layout, rects) {
   return s;
 }
 
-/** 絵を置いたコマの位置と拡大（Studio のページ編集の「位置」「拡大」に同じ値を入れれば同じに見える）。 */
+/** 絵を置いたコマの拡大・ずらし・回転（Studio のページ編集の「ズーム」「ずらし」「回転」に同じ値を入れれば同じに見える）。 */
 function imageControls(layout) {
   const rows = [];
   layout.panels.forEach((_, i) => {
@@ -279,13 +315,20 @@ function imageControls(layout) {
         type: "range", min: ZOOM_MIN, max: ZOOM_MAX, step: 0.05, value: im.zoom, "aria-label": `コマ ${i + 1} の拡大`,
         on: { input: (e) => set({ zoom: Number(e.target.value) }) },
       }), el("span", { class: "num" }, im.zoom.toFixed(2))),
-      el("span", { class: "num" }, `位置 ${im.px.toFixed(1)}% ${im.py.toFixed(1)}%`),
-      el("button", { type: "button", class: "btn sub small", on: { click: () => set({ px: 50, py: 50, zoom: 1 }) } }, "戻す"),
+      el("label", {}, "回転", el("input", {
+        type: "range", min: -180, max: 180, step: 1, value: im.rot, "aria-label": `コマ ${i + 1} の回転`,
+        on: { input: (e) => set({ rot: Number(e.target.value) }) },
+      }), el("span", { class: "num" }, `${im.rot}°`)),
+      el("span", { class: "num" }, `ずらし ${fmt1(im.ox)}% ${fmt1(im.oy)}%`),
+      el("button", { type: "button", class: "btn sub small", on: { click: () => set({ zoom: 1, ox: 0, oy: 0, rot: 0 }) } }, "コマいっぱいに戻す"),
+      ...(fitKomaImage(layout.panels[i], im.iw, im.ih)
+        ? [el("button", { type: "button", class: "btn sub small", on: { click: () => set({ ...fitKomaImage(layout.panels[i], im.iw, im.ih), rot: 0 }) } }, "下絵どおりに戻す")]
+        : []),
     ));
   });
   if (!rows.length) return "";
   return el("div", { class: "imgctl" },
-    el("p", { class: "hint" }, "絵はドラッグで動かし、マウスのホイール（またはスライダー）で拡大・縮小できます。拡大 1 はコマいっぱいです。"),
+    el("p", { class: "hint" }, "絵はドラッグでどの向きにも動かせ、マウスのホイール（またはスライダー）で拡大・縮小、スライダーで回転できます。下絵の大きさのまま描いた絵は、余白がちょうどコマの外に出るように置きます。"),
     ...rows);
 }
 
@@ -433,6 +476,7 @@ function downloadComposite(btn) {
       ctx.save();
       ctx.translate(b.cx, b.cy); ctx.rotate((b.rot * Math.PI) / 180); ctx.translate(-b.cx, -b.cy);
       ctx.beginPath(); r.flat.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.clip();
+      if (im.rot) { const cx = q.x + q.w / 2, cy = q.y + q.h / 2; ctx.translate(cx, cy); ctx.rotate((im.rot * Math.PI) / 180); ctx.translate(-cx, -cy); }
       ctx.drawImage(img, q.x, q.y, q.w, q.h);
       ctx.restore();
     }
