@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>コマ割り一覧</title>
+<meta name="description" content="コマ割りの一覧。選んだコマ割りの各コマにぴったりの白紙 PNG（コマ下絵）を ZIP でダウンロードでき、手元の画像を置いて見た目を確かめられます。">
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1b1b1b; --muted: #6b6b6b; --line: #d9d9d4;
+  --accent: #c2410c; --accent-ink: #ffffff; --sel: #fff3e8; --page: #ffffff; --koma: #1b1b1b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161616; --panel: #1f1f1f; --ink: #ececec; --muted: #a3a3a3; --line: #3a3a3a;
+    --accent: #fb923c; --accent-ink: #1b1b1b; --sel: #33261b; --page: #fafafa; --koma: #1b1b1b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161616; --panel: #1f1f1f; --ink: #ececec; --muted: #a3a3a3; --line: #3a3a3a;
+  --accent: #fb923c; --accent-ink: #1b1b1b; --sel: #33261b; --page: #fafafa; --koma: #1b1b1b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+header, main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 8px 0 4px; }
+.lead { color: var(--muted); margin: 0; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 12px 0; }
+.bar label { display: flex; align-items: center; gap: 6px; }
+select, input[type="search"], input[type="number"] { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+input[type="search"] { flex: 1 1 200px; min-width: 0; }
+input[type="number"] { width: 88px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.count { color: var(--muted); font-size: 13px; }
+.filter { display: flex; gap: 8px; align-items: baseline; }
+.flabel { flex: none; color: var(--muted); font-size: 12px; min-width: 3.5em; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr) 420px; align-items: start; } .detail { position: sticky; top: 12px; } }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.tile { font: inherit; display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); cursor: pointer; }
+.tile:hover { border-color: var(--accent); }
+.tile[aria-current="true"] { border-color: var(--accent); background: var(--sel); outline: 2px solid var(--accent); }
+.tile svg { width: 100%; height: auto; display: block; }
+.tile span { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; text-align: center; }
+.detail { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.detail h2 { font-size: 16px; margin: 0 0 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.detail .hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+.preview { position: relative; margin: 8px auto; max-width: 360px; }
+.preview svg { width: 100%; height: auto; display: block; background: var(--page); box-shadow: 0 0 0 1px var(--line); }
+.koma { cursor: pointer; }
+.koma:hover polygon.edge { stroke: var(--accent); }
+.drop-on { outline: 3px dashed var(--accent); outline-offset: 4px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0; }
+.btn { font: inherit; font-weight: 700; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+.btn.sub { background: var(--panel); color: var(--ink); border-color: var(--line); font-weight: 400; }
+.btn:disabled { opacity: .5; cursor: default; }
+.sizes { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); margin: 6px 0 0; padding-left: 18px; }
+.empty { color: var(--muted); padding: 24px 0; }
+footer { max-width: 1200px; margin: 0 auto; padding: 16px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>コマ割り一覧</h1>
+  <p class="lead">コマ割りを選ぶと、各コマにぴったりの白紙 PNG（コマ下絵）を ZIP でダウンロードできます。描いた絵をコマに置くと、手元で並びを確かめられます（画像はどこにも送りません）。</p>
+  <div class="bar">
+    <label>ページの形
+      <select id="ratio">
+        <option value="portrait">縦長 3:4</option>
+        <option value="tall">縦長 9:16</option>
+        <option value="square">正方形 1:1</option>
+        <option value="wide">横長 16:9</option>
+        <option value="cinematic">横長 21:9</option>
+      </select>
+    </label>
+    <div class="filter"><span class="flabel">形</span><div class="chips" id="shapes" role="group" aria-label="コマの形"></div></div>
+    <input type="search" id="q" placeholder="ID で絞り込み（例: slant-622）" aria-label="ID で絞り込み">
+  </div>
+  <div class="filter"><span class="flabel">コマ数</span><div class="chips" id="groups" role="group" aria-label="コマ数"></div></div>
+</header>
+<main>
+  <div class="layout">
+    <section>
+      <p class="count" id="count"></p>
+      <div class="grid" id="grid"></div>
+    </section>
+    <aside class="detail" id="detail" aria-live="polite">
+      <p class="empty">左の一覧からコマ割りを選んでください。</p>
+    </aside>
+  </div>
+</main>
+<footer id="footer"></footer>
+<script src="app.js"></script>
+</body>
+</html>
