@@ -172,7 +172,7 @@ function preview(layout, rects) {
     const clip = svg("clipPath", { id: `clip-${i}` });
     clip.append(svg("polygon", { points }));
     defs.append(clip);
-    const g = svg("g", { class: "koma", tabindex: 0, role: "button", "aria-label": `コマ ${i + 1} に絵を置く` });
+    const g = svg("g", { class: "koma", tabindex: 0, role: "button", "aria-label": `コマ ${i + 1} に画像をアップロード` });
     g.append(svg("polygon", { points, fill: "#ffffff" }));
     const im = state.images.get(imgKey(i));
     if (im) {
@@ -220,7 +220,7 @@ function renderDetail() {
   pv.addEventListener("drop", (e) => { e.preventDefault(); pv.classList.remove("drop-on"); placeFiles([...(e.dataTransfer?.files ?? [])]); });
   box.replaceChildren(
     el("h2", {}, layout.id),
-    el("p", { class: "hint" }, `${layout.panels.length} コマ。コマを押すか画像を落とすと、そのコマに絵を置いて見られます（何枚かまとめて落とすと koma-1… の名前の順に入ります）。`),
+    el("p", { class: "hint" }, `${layout.panels.length} コマ。対象のコマをクリックして画像をアップロードするか、画像ファイルをコマにドラッグすると、そのコマに絵が表示されます（画像はこのブラウザの中だけで表示し、どこにも送りません）。何枚かまとめてドラッグすると、ファイル名の koma-1・koma-2 … の番号のコマに入ります。`),
     pv,
     el("div", { class: "row" },
       numberInput("ページ幅 px", "pageWidth", 400, 6000, 100),
