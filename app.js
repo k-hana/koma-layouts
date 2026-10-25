@@ -42,7 +42,13 @@ const svg = (tag, attrs = {}) => {
 const groupOf = (n) => (n <= 1 ? "1" : n >= 9 ? "other" : String(n));
 const aspectOf = (ratio) => state.data.ratios[ratio] ?? 1;
 
-function panelVerts(p, W, H) {
+/** コマの箱（回転前・ページ px）と回転の中心。Studio は絵をこの箱いっぱいに置き、箱ごと回す。 */
+function panelBox(p, W, H) {
+  const x = (p.x / 100) * W, y = (p.y / 100) * H, w = (p.width / 100) * W, h = (p.height / 100) * H;
+  return { x, y, w, h, cx: x + w / 2, cy: y + h / 2, rot: p.rotation || 0 };
+}
+
+function panelVerts(p, W, H, { rotate = true } = {}) {
   let verts;
   if (p.clip && p.clip.length >= 3) {
     verts = p.clip.map(([cx, cy]) => [((p.x + (cx / 100) * p.width) / 100) * W, ((p.y + (cy / 100) * p.height) / 100) * H]);
@@ -50,7 +56,7 @@ function panelVerts(p, W, H) {
     const x0 = (p.x / 100) * W, y0 = (p.y / 100) * H, x1 = ((p.x + p.width) / 100) * W, y1 = ((p.y + p.height) / 100) * H;
     verts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
   }
-  if (p.rotation) {
+  if (p.rotation && rotate) {
     const rad = (p.rotation * Math.PI) / 180;
     const cx = ((p.x + p.width / 2) / 100) * W, cy = ((p.y + p.height / 2) / 100) * H;
     const cos = Math.cos(rad), sin = Math.sin(rad);
@@ -74,7 +80,7 @@ function komaRects(layout) {
     const minX = Math.min(...xs), minY = Math.min(...ys);
     const w = Math.max(1, Math.round(Math.max(...xs) - minX + 2 * m));
     const h = Math.max(1, Math.round(Math.max(...ys) - minY + 2 * m));
-    return { verts, x: minX - m, y: minY - m, w, h, m, minX, minY };
+    return { verts, flat: panelVerts(p, W, H, { rotate: false }), box: panelBox(p, W, H), x: minX - m, y: minY - m, w, h, m, minX, minY };
   });
 }
 
@@ -130,12 +136,29 @@ function select(layout) {
 
 const imgKey = (i) => `${state.current.id}:${i}`;
 
+/** 置いた絵。px・py は位置（Studio の background-position の %・50 が中央）、zoom は拡大（1 がコマいっぱい）。 */
 function setImage(i, file) {
   if (!file || !file.type.startsWith("image/")) return;
   const old = state.images.get(imgKey(i));
   if (old) URL.revokeObjectURL(old.url);
-  state.images.set(imgKey(i), { url: URL.createObjectURL(file), name: file.name });
+  const im = { url: URL.createObjectURL(file), name: file.name, iw: 0, ih: 0, px: 50, py: 50, zoom: 1 };
+  state.images.set(imgKey(i), im);
+  const probe = new Image();
+  probe.onload = () => { im.iw = probe.naturalWidth; im.ih = probe.naturalHeight; renderDetail(); };
+  probe.src = im.url;
 }
+
+/** Studio と同じ置き方: zoom が 1 ならコマの箱いっぱい（cover）、それ以外は箱の幅 × zoom。位置は background-position の %。 */
+function imagePlacement(box, im) {
+  if (!im.iw || !im.ih) return { x: box.x, y: box.y, w: box.w, h: box.h };
+  let w, h;
+  if (im.zoom === 1) { const k = Math.max(box.w / im.iw, box.h / im.ih); w = im.iw * k; h = im.ih * k; }
+  else { w = box.w * im.zoom; h = (w * im.ih) / im.iw; }
+  return { x: box.x + ((box.w - w) * im.px) / 100, y: box.y + ((box.h - h) * im.py) / 100, w, h };
+}
+const ZOOM_MIN = 0.3, ZOOM_MAX = 5;      // Studio の拡大の入力欄と同じ
+const POS_MIN = -120, POS_MAX = 220;     // Studio のドラッグの位置の範囲と同じ
+const clampNum = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 /** 何枚か一度に落としたとき: ファイル名の koma-{番号} でコマを決め、無ければ空いたコマに順に置く。 */
 function placeFiles(files, startAt = 0) {
@@ -169,18 +192,24 @@ function preview(layout, rects) {
   const sw = Math.max(2, W / 400);
   rects.forEach((r, i) => {
     const points = r.verts.map((v) => v.join(",")).join(" ");
+    const b = r.box;
     const clip = svg("clipPath", { id: `clip-${i}` });
-    clip.append(svg("polygon", { points }));
+    clip.append(svg("polygon", { points: r.flat.map((v) => v.join(",")).join(" ") })); // 回転前の形（箱と一緒に回す）
     defs.append(clip);
     const g = svg("g", { class: "koma", tabindex: 0, role: "button", "aria-label": `コマ ${i + 1} に画像をアップロード` });
     g.append(svg("polygon", { points, fill: "#ffffff" }));
     const im = state.images.get(imgKey(i));
+    let image = null;
     if (im) {
-      // 白紙の大きさ（外接矩形＋余白）に合わせて置く。縦横比が違えば中央で切り取る
-      const image = svg("image", { x: r.x, y: r.y, width: r.w, height: r.h, preserveAspectRatio: "xMidYMid slice", "clip-path": `url(#clip-${i})` });
+      const inner = svg("g", { transform: `rotate(${b.rot} ${b.cx} ${b.cy})`, "clip-path": `url(#clip-${i})` });
+      image = svg("image", { preserveAspectRatio: "none" });
       image.setAttributeNS("http://www.w3.org/1999/xlink", "href", im.url);
       image.setAttribute("href", im.url);
-      g.append(image);
+      const place = () => { const q = imagePlacement(b, im); image.setAttribute("x", q.x); image.setAttribute("y", q.y); image.setAttribute("width", q.w); image.setAttribute("height", q.h); };
+      place();
+      image.place = place;
+      inner.append(image);
+      g.append(inner);
     } else {
       const cx = r.minX + (r.w - 2 * r.m) / 2, cy = r.minY + (r.h - 2 * r.m) / 2;
       const t = svg("text", { x: cx, y: cy, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": W / 22, fill: "#9a9a9a" });
@@ -188,7 +217,43 @@ function preview(layout, rects) {
       g.append(t);
     }
     g.append(svg("polygon", { class: "edge", points, fill: "none", stroke: "var(--koma)", "stroke-width": sw, "stroke-linejoin": "round" }));
-    g.addEventListener("click", () => pickFile(i));
+    // 絵のあるコマはドラッグで位置を動かし、ホイールで拡大縮小する（Studio と同じ向き・同じ範囲）。動かさずに離せばクリック
+    g.addEventListener("pointerdown", (e) => {
+      if (!im || e.button !== 0) return;
+      e.preventDefault();
+      g.setPointerCapture(e.pointerId);
+      const unit = s.getBoundingClientRect().width / W; // 画面の 1px あたりのページ px
+      const sx = e.clientX, sy = e.clientY, px0 = im.px, py0 = im.py;
+      const rad = (-b.rot * Math.PI) / 180;
+      let moved = false;
+      const move = (ev) => {
+        const dxs = ev.clientX - sx, dys = ev.clientY - sy;
+        if (!moved && Math.hypot(dxs, dys) < 4) return;
+        moved = true;
+        const dx = dxs * Math.cos(rad) - dys * Math.sin(rad), dy = dxs * Math.sin(rad) + dys * Math.cos(rad); // 箱の向きに直す
+        im.px = clampNum(px0 - (dx / (b.w * unit)) * 100, POS_MIN, POS_MAX);
+        im.py = clampNum(py0 - (dy / (b.h * unit)) * 100, POS_MIN, POS_MAX);
+        image.place();
+      };
+      const up = () => {
+        g.removeEventListener("pointermove", move);
+        g.removeEventListener("pointerup", up);
+        g.removeEventListener("pointercancel", up);
+        if (moved) renderDetail(); else pickFile(i);
+      };
+      g.addEventListener("pointermove", move);
+      g.addEventListener("pointerup", up);
+      g.addEventListener("pointercancel", up);
+    });
+    g.addEventListener("click", () => { if (!im) pickFile(i); });
+    g.addEventListener("wheel", (e) => {
+      if (!im) return;
+      e.preventDefault();
+      im.zoom = Math.round(clampNum(im.zoom * (e.deltaY < 0 ? 1.05 : 1 / 1.05), ZOOM_MIN, ZOOM_MAX) * 100) / 100;
+      image.place();
+      clearTimeout(g.wheelTimer);
+      g.wheelTimer = setTimeout(renderDetail, 300);
+    }, { passive: false });
     g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickFile(i); } });
     g.addEventListener("dragover", (e) => e.preventDefault());
     g.addEventListener("drop", (e) => {
@@ -199,6 +264,29 @@ function preview(layout, rects) {
     s.append(g);
   });
   return s;
+}
+
+/** 絵を置いたコマの位置と拡大（Studio のページ編集の「位置」「拡大」に同じ値を入れれば同じに見える）。 */
+function imageControls(layout) {
+  const rows = [];
+  layout.panels.forEach((_, i) => {
+    const im = state.images.get(imgKey(i));
+    if (!im) return;
+    const set = (patch) => { Object.assign(im, patch); renderDetail(); };
+    rows.push(el("div", { class: "imgrow" },
+      el("strong", {}, `コマ ${i + 1}`),
+      el("label", {}, "拡大", el("input", {
+        type: "range", min: ZOOM_MIN, max: ZOOM_MAX, step: 0.05, value: im.zoom, "aria-label": `コマ ${i + 1} の拡大`,
+        on: { input: (e) => set({ zoom: Number(e.target.value) }) },
+      }), el("span", { class: "num" }, im.zoom.toFixed(2))),
+      el("span", { class: "num" }, `位置 ${im.px.toFixed(1)}% ${im.py.toFixed(1)}%`),
+      el("button", { type: "button", class: "btn sub small", on: { click: () => set({ px: 50, py: 50, zoom: 1 }) } }, "戻す"),
+    ));
+  });
+  if (!rows.length) return "";
+  return el("div", { class: "imgctl" },
+    el("p", { class: "hint" }, "絵はドラッグで動かし、マウスのホイール（またはスライダー）で拡大・縮小できます。拡大 1 はコマいっぱいです。"),
+    ...rows);
 }
 
 function numberInput(label, key, min, max, step) {
@@ -222,6 +310,7 @@ function renderDetail() {
     el("h2", {}, layout.id),
     el("p", { class: "hint" }, `${layout.panels.length} コマ。対象のコマをクリックして画像をアップロードするか、画像ファイルをコマにドラッグすると、そのコマに絵が表示されます（画像はこのブラウザの中だけで表示し、どこにも送りません）。何枚かまとめてドラッグすると、ファイル名の koma-1・koma-2 … の番号のコマに入ります。`),
     pv,
+    imageControls(layout),
     el("div", { class: "row" },
       numberInput("ページ幅 px", "pageWidth", 400, 6000, 100),
       numberInput("余白 px", "margin", 0, 400, 4),
@@ -340,10 +429,11 @@ function downloadComposite(btn) {
       const im = state.images.get(imgKey(i));
       if (!im) continue;
       const img = await loadImage(im.url);
-      const scale = Math.max(r.w / img.width, r.h / img.height); // 中央で切り取る（プレビューと同じ）
-      const dw = img.width * scale, dh = img.height * scale;
-      ctx.save(); path(r); ctx.clip();
-      ctx.drawImage(img, r.x + (r.w - dw) / 2, r.y + (r.h - dh) / 2, dw, dh);
+      const b = r.box, q = imagePlacement(b, im); // プレビューと同じ置き方（箱と一緒に回す）
+      ctx.save();
+      ctx.translate(b.cx, b.cy); ctx.rotate((b.rot * Math.PI) / 180); ctx.translate(-b.cx, -b.cy);
+      ctx.beginPath(); r.flat.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.clip();
+      ctx.drawImage(img, q.x, q.y, q.w, q.h);
       ctx.restore();
     }
     ctx.strokeStyle = "#1b1b1b";
